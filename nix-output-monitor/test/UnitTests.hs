@@ -1,8 +1,18 @@
+import Control.Monad.Trans.Writer.CPS (runWriterT)
 import Data.ByteString.Char8 qualified as ByteString
-import Data.Set (singleton)
+import Data.Map.Strict qualified as Map
+import Data.Set (Set, singleton)
+import Data.Strict qualified as Strict
+import Data.Time (UTCTime (..))
+import Data.Time.Calendar (Day (..))
+import Nix.Derivation qualified as Nix
 import NOM.Builds
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
+import NOM.State
+import NOM.State.CacheId.Set qualified as CSet
+import NOM.Update (insertDerivation)
+import NOM.Update.Monad
 import NOM.Util (parseOne)
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -15,6 +25,86 @@ assertOldStyleParse input = do
   let (t, res') = Unsafe.fromJust res
   assertBool "parsing succeeds with an actual match" (isJust res')
   pure (t, Unsafe.fromJust res')
+
+-- | Pure stub for the 'UpdateMonad' constraints, allowing tests to drive
+-- 'insertDerivation' without touching the real Nix store: derivation file
+-- reads always resolve to the same input-free derivation.
+newtype TestM a = TestM {unTestM :: State NOMState a}
+  deriving newtype (Functor, Applicative, Monad, MonadState NOMState)
+
+instance MonadNow TestM where
+  getNow = pure 0
+  getUTC = pure (UTCTime (ModifiedJulianDay 0) 0)
+
+instance MonadReadDerivation TestM where
+  getDerivation _ = pure (Right (testDerivation mempty))
+
+instance MonadCacheBuildReports TestM where
+  getCachedBuildReports = pure mempty
+
+instance MonadCheckStorePath TestM where
+  subscribeStorePath _ _ = pure ()
+  foundStorePaths = pure []
+
+-- | Derivation file contents for tests, parameterised over derivation inputs.
+testDerivation :: Map FilePath (Set Text) -> Nix.Derivation FilePath Text
+testDerivation deps =
+  Nix.Derivation
+    { Nix.outputs = mempty
+    , Nix.inputDrvs = deps
+    , Nix.inputSrcs = mempty
+    , Nix.platform = ""
+    , Nix.builder = ""
+    , Nix.args = mempty
+    , Nix.env = mempty
+    }
+
+emptyTestState :: NOMState
+emptyTestState =
+  MkNOMState
+    { derivationInfos = mempty
+    , storePathInfos = mempty
+    , fullSummary = mempty
+    , forestRoots = mempty
+    , buildReports = mempty
+    , startTime = 0
+    , progressState = JustStarted
+    , storePathIds = mempty
+    , derivationIds = mempty
+    , touchedIds = mempty
+    , activities = mempty
+    , nixErrors = mempty
+    , nixTraces = mempty
+    , buildPlatform = Strict.Nothing
+    , interestingActivities = mempty
+    , evaluationState = MkEvalInfo{count = 0, at = 0, lastFileName = Strict.Nothing}
+    }
+
+-- | Register a derivation (with the given file contents) and return its id.
+insertTestDerivation :: Nix.Derivation FilePath Text -> Derivation -> TestM DerivationId
+insertTestDerivation parsed drv = do
+  drvId <- getDerivationId drv
+  void (runWriterT (insertDerivation parsed drvId))
+  pure drvId
+
+evalTest :: TestM a -> a
+evalTest = flip evalState emptyTestState . unTestM
+
+execTest :: TestM a -> NOMState
+execTest = flip execState emptyTestState . unTestM
+
+-- | Roots of the dependency forest in a finished test state.
+rootsOf :: NOMState -> [DerivationId]
+rootsOf testState = CSet.toList testState.forestRoots
+
+rootDrv :: Derivation
+rootDrv = Derivation (StorePath "cccccccccccccccccccccccccccccccc" "root")
+
+parentDrv :: Derivation
+parentDrv = Derivation (StorePath "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "parent")
+
+childDrvPath :: FilePath
+childDrvPath = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-child.drv"
 
 main :: IO ()
 main = do
@@ -119,5 +209,14 @@ main = do
               "result matches"
               (Failed (Derivation $ StorePath "d055cqki6z1vll144kvj496cknwvwi44" "build-fail") (ExitCode 1))
               result
+        , "Forest roots deduplicate reinserted derivations" ~: do
+            let expected = evalTest (getDerivationId rootDrv)
+                finalRoots = rootsOf (execTest (insertTestDerivation (testDerivation mempty) rootDrv >> insertTestDerivation (testDerivation mempty) rootDrv))
+            assertEqual "reinserting a root keeps a single entry" [expected] finalRoots
+        , "Forest roots keep only the topmost derivation" ~: do
+            let parentWithChild = testDerivation (Map.singleton childDrvPath (singleton "out"))
+                expected = evalTest (getDerivationId parentDrv)
+                finalRoots = rootsOf (execTest (insertTestDerivation parentWithChild parentDrv))
+            assertEqual "the child is rewired below its parent" [expected] finalRoots
         ]
   if errors counts + failures counts == 0 then exitSuccess else exitFailure

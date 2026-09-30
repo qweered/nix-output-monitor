@@ -4,6 +4,8 @@ module NOM.Update (
   maintainState,
   appendDifferingPlatform,
   checkFinishedBuilds,
+  -- | Exposed for the unit-test regression suite.
+  insertDerivation,
 ) where
 
 import Control.Monad.Trans.Writer.CPS (WriterT, runWriterT, tell)
