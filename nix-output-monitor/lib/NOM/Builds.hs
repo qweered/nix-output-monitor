@@ -76,7 +76,7 @@ parseIndentedStoreObject = either fail pure . TextParser.parseOnly indentedStore
 
 parseHost :: Text -> Host WithContext
 parseHost hostname
-  | hostname `elem` ["", "local", "local://", "unix", "unix://"] = Localhost
+  | hostname `elem` ["", "local", "local://", "unix", "unix://", "daemon"] = Localhost
   | otherwise = Host proto user host
  where
   (proto, (user, host)) = second (breakOnMaybe "@") $ breakOnMaybe "://" hostname

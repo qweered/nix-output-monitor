@@ -275,5 +275,12 @@ main = do
         , "Parse derivation escapes" ~: do
             Right parsed <- pure (NomDrv.parseDerivationText "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"GREETING\",\"hello\\nworld\")])")
             assertEqual "escapes decode" (Map.singleton "GREETING" "hello\nworld") parsed.env
+        , "Parse daemon store host as local" ~: do
+            assertEqual "empty host is local" Localhost (parseHost "")
+            assertEqual "daemon store is local" Localhost (parseHost "daemon")
+            assertEqual
+              "remote hosts keep parsing"
+              (Host (Just "ssh-ng") Nothing "example.com")
+              (parseHost "ssh-ng://example.com")
         ]
   if errors counts + failures counts == 0 then exitSuccess else exitFailure
