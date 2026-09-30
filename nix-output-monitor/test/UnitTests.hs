@@ -31,8 +31,11 @@ assertOldStyleParse input = do
 'insertDerivation' without touching the real Nix store: derivation file
 reads always resolve to the same input-free derivation.
 -}
-newtype TestM a = TestM {unTestM :: State NOMState a}
+newtype TestM a = TestM (State NOMState a)
   deriving newtype (Functor, Applicative, Monad, MonadState NOMState)
+
+runTestM :: TestM a -> State NOMState a
+runTestM (TestM testState) = testState
 
 instance MonadNow TestM where
   getNow = pure 0
@@ -90,10 +93,10 @@ insertTestDerivation parsed drv = do
   pure drvId
 
 evalTest :: TestM a -> a
-evalTest = flip evalState emptyTestState . unTestM
+evalTest = flip evalState emptyTestState . runTestM
 
 execTest :: TestM a -> NOMState
-execTest = flip execState emptyTestState . unTestM
+execTest = flip execState emptyTestState . runTestM
 
 -- | Roots of the dependency forest in a finished test state.
 rootsOf :: NOMState -> [DerivationId]
