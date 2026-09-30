@@ -59,7 +59,6 @@ showCode :: Text -> [String]
 showCode = map (printf "%02X" . fromEnum) . toString
 
 vertical, lowerleft, upperleft, horizontal, down, up, clock, running, done, bigsum, warning, todo, leftT, average :: Text
-
 targetRatio, defaultTreeMax, defaultTreeWidth :: Int
 
 -- | U+2503 BOX DRAWINGS HEAVY VERTICAL
@@ -114,8 +113,11 @@ bigsum = "∑"
 -}
 showCond :: (Monoid m) => Bool -> m -> m
 showCond = memptyIfFalse
+
 targetRatio = 3 -- We divide by this, don‘t set this to zero.
+
 defaultTreeMax = 20
+
 defaultTreeWidth = 60
 
 data Config = MkConfig

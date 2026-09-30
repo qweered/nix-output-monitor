@@ -5,8 +5,8 @@ import Data.Set (Set, fromList, singleton)
 import Data.Strict qualified as Strict
 import Data.Time (UTCTime (..))
 import Data.Time.Calendar (Day (..))
-import NOM.Derivation qualified as NomDrv
 import NOM.Builds
+import NOM.Derivation qualified as NomDrv
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
 import NOM.State
@@ -26,9 +26,10 @@ assertOldStyleParse input = do
   assertBool "parsing succeeds with an actual match" (isJust res')
   pure (t, Unsafe.fromJust res')
 
--- | Pure stub for the 'UpdateMonad' constraints, allowing tests to drive
--- 'insertDerivation' without touching the real Nix store: derivation file
--- reads always resolve to the same input-free derivation.
+{- | Pure stub for the 'UpdateMonad' constraints, allowing tests to drive
+'insertDerivation' without touching the real Nix store: derivation file
+reads always resolve to the same input-free derivation.
+-}
 newtype TestM a = TestM {unTestM :: State NOMState a}
   deriving newtype (Functor, Applicative, Monad, MonadState NOMState)
 
@@ -251,7 +252,7 @@ main = do
         , "Parse impure derivation" ~: do
             Right parsed <- pure (NomDrv.parseDerivationText "Derive([(\"out\",\"\",\"r:sha256\",\"impure\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
             assertEqual "impure outputs have no known path" Nothing (NomDrv.outputPath =<< Map.lookup "out" (NomDrv.outputs parsed))
-, "Parse DrvWithVersion with dynamic inputDrvs" ~: do
+        , "Parse DrvWithVersion with dynamic inputDrvs" ~: do
             assertEqual
               "nested uses flatten into a single set"
               ( Right

@@ -12,25 +12,27 @@ import Data.Set qualified as Set
 import Data.Text qualified as Text
 import Relude
 
--- | A single output of a Nix derivation.
---
--- Nix serialises derivations on disk in ATerm format, e.g.
---
--- > Derive([("out","/nix/store/...","","")], [...], [...], ...)
---
--- For input-addressed derivations every output has a known store path.
--- For floating content-addressed derivations (experimental @ca-derivations@),
--- deferred outputs and impure derivations (experimental @impure-derivations@)
--- the path is empty (@""@):
---
--- > Derive([("out","","r:sha256","")], [...], [...], ...)
---
--- See @src/libstore/derivations.cc:parseDerivationOutput@ in the Nix source
--- and https://github.com/maralorn/nix-output-monitor/issues/167.
+{- | A single output of a Nix derivation.
+
+Nix serialises derivations on disk in ATerm format, e.g.
+
+> Derive([("out","/nix/store/...","","")], [...], [...], ...)
+
+For input-addressed derivations every output has a known store path.
+For floating content-addressed derivations (experimental @ca-derivations@),
+deferred outputs and impure derivations (experimental @impure-derivations@)
+the path is empty (@""@):
+
+> Derive([("out","","r:sha256","")], [...], [...], ...)
+
+See @src/libstore/derivations.cc:parseDerivationOutput@ in the Nix source
+and https://github.com/maralorn/nix-output-monitor/issues/167.
+-}
 data DerivationOutput = DerivationOutput
   { path :: Maybe FilePath
-  -- ^ Known output path, if any. 'Nothing' for floating CA, deferred and
-  -- impure outputs.
+  {- ^ Known output path, if any. 'Nothing' for floating CA, deferred and
+  impure outputs.
+  -}
   , hashAlgo :: Text
   , hash :: Text
   }
@@ -52,8 +54,9 @@ data Derivation = Derivation
 outputPath :: DerivationOutput -> Maybe FilePath
 outputPath output = output.path
 
--- | Parse a derivation from strict 'Text'. Accepts both @Derive(...)@ and
--- @DrvWithVersion("xp-dyn-drv", ...)@ (experimental @dynamic-derivations@).
+{- | Parse a derivation from strict 'Text'. Accepts both @Derive(...)@ and
+@DrvWithVersion("xp-dyn-drv", ...)@ (experimental @dynamic-derivations@).
+-}
 parseDerivationText :: Text -> Either String Derivation
 parseDerivationText = AT.parseOnly (parseDerivation <* AT.endOfInput)
 
@@ -114,16 +117,18 @@ parseDerivation = do
     void (AT.char ')')
     pure (key, value)
 
--- | Parse the set of output names an input derivation is used by.
---
--- Old (stable) form is a plain list: @["out", "bin"]@.
--- New (experimental @dynamic-derivations@) form is a pair of a shallow set
--- and a map of nested uses: @(["out"], [("foo", ["bar"])])@.
--- We flatten everything into a single set, which is a safe over-approximation
--- for dependency tracking.
+{- | Parse the set of output names an input derivation is used by.
+
+Old (stable) form is a plain list: @["out", "bin"]@.
+New (experimental @dynamic-derivations@) form is a pair of a shallow set
+and a map of nested uses: @(["out"], [("foo", ["bar"])])@.
+We flatten everything into a single set, which is a safe over-approximation
+for dependency tracking.
+-}
 parseNodeOutputs :: AT.Parser (Set Text)
 parseNodeOutputs =
-  Set.fromList <$> listOf textParser
+  Set.fromList
+    <$> listOf textParser
     <|> do
       void (AT.char '(')
       shallow <- Set.fromList <$> listOf textParser
@@ -143,8 +148,9 @@ parseNodeOutputs =
     void (AT.char ')')
     pure (key, value)
 
--- | Parse a @\"..."@ string with @\\n@, @\\r@, @\\t@, @\\\\@ and @\\"@
--- escapes, matching Nix\'s ATerm printer.
+{- | Parse a @\"..."@ string with @\\n@, @\\r@, @\\t@, @\\\\@ and @\\"@
+escapes, matching Nix\'s ATerm printer.
+-}
 textParser :: AT.Parser Text
 textParser = do
   void (AT.char '"')

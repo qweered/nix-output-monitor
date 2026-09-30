@@ -17,6 +17,7 @@ import Data.Strict qualified as Strict
 import Data.Text qualified as Text
 import Data.Time (UTCTime)
 import NOM.Builds (Derivation (..), FailType, Host (..), HostContext (..), StorePath (..), forgetProto, parseDerivation, parseIndentedStoreObject, parseStorePath)
+import NOM.Derivation qualified as NomDrv
 import NOM.Error (NOMError)
 import NOM.NixMessage.JSON (Activity, ActivityId, ActivityResult (..), MessageAction (..), NixJSONMessage (..), ResultAction (..), StartAction (..), StopAction (..), Verbosity (..))
 import NOM.NixMessage.JSON qualified as JSON
@@ -71,7 +72,6 @@ import NOM.Update.Monad (
   UpdateMonad,
  )
 import NOM.Util (parseOneText, repeatedly)
-import NOM.Derivation qualified as NomDrv
 import Numeric.Extra (intToDouble)
 import Optics (Ixed (..), assign', has, modifying', preuse, preview, (%), (%~), (.~))
 import Relude
