@@ -18,12 +18,12 @@ runNixOSTest {
     # "with_nix" tests builds with minimal path requirements (just busybox).
     # Removing this will fail because qemu can't access internet.
     environment.systemPackages = [ pinned-pkgs.busybox ];
-    nix.nixPath = [ "nixpkgs=${pin}" ];
 
     nix = {
       package = nixPackage;
 
       settings = {
+        nix-path = [ "nixpkgs=${pin}" ];
         substitute = false;
         # When building a, b, c where a depends on b, c should build instead of being pending.
         # For that reason, we need 4 jobs (4 > 3 which are the a, b, and c builds).

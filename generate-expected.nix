@@ -23,10 +23,9 @@ pkgs.testers.runNixOSTest {
       nix = {
         package = pkgs.nixVersions.${nixVersion};
 
-        nixPath = [ "nixpkgs=${pin}" ];
-
         settings = {
           substitute = false;
+          nix-path = [ "nixpkgs=${pin}" ];
 
           # nom testsuite uses nix-command, probably flakes
           experimental-features = [
