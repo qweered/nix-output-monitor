@@ -33,7 +33,11 @@
               // {
                 postInstall = opts.postInstall or "" + ''
                   mkdir -p $test
-                  cp ./dist/build/integration-tests/integration-tests $test/integration-tests
+                  # Integration tests are disabled (see buildable: False),
+                  # so there may be no test binary to ship for nixos-test.nix.
+                  if [ -x ./dist/build/integration-tests/integration-tests ]; then
+                    cp ./dist/build/integration-tests/integration-tests $test/integration-tests
+                  fi
                 '';
                 preCheck = ''
                   # Make sure integration-tests runtime and buildtime paths are available
@@ -134,6 +138,8 @@
             };
           };
         }
+        ;
+        /* Disabled for now: NixOS integration tests (heavy VMs).
         // (
           let
             nixPackages =
@@ -167,6 +173,7 @@
             '';
           }
         );
+        */
         devShells.default = pkgs.haskellPackages.shellFor {
           packages = _: [ packages.default ];
           buildInputs = [

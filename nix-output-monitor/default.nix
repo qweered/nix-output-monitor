@@ -1,9 +1,9 @@
 { mkDerivation, ansi-terminal, async, attoparsec, base, bytestring
 , cassava, containers, directory, doctest-parallel, extra, filelock
-, filepath, fsnotify, hermes-json, HUnit, lib, optics, random
-, relude, safe, safe-exceptions, stm, streamly-core, strict
-, template-haskell, terminal-size, text, time, transformers
-, typed-process, unix, word8
+, filepath, fsnotify, hermes-json, HUnit, lib, optics, relude, safe
+, safe-exceptions, stm, streamly-core, strict, template-haskell
+, terminal-size, text, time, transformers, typed-process, unix
+, word8
 }:
 mkDerivation {
   pname = "nix-output-monitor";
@@ -27,7 +27,7 @@ mkDerivation {
   testHaskellDepends = [
     ansi-terminal async attoparsec base bytestring cassava containers
     directory doctest-parallel extra filelock filepath fsnotify
-    hermes-json HUnit optics random relude safe safe-exceptions stm
+    hermes-json HUnit optics relude safe safe-exceptions stm
     streamly-core strict template-haskell terminal-size text time
     transformers typed-process word8
   ];

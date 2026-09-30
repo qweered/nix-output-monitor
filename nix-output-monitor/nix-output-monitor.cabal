@@ -179,6 +179,8 @@ test-suite unit-tests
   main-is: UnitTests.hs
 
 test-suite integration-tests
+  -- Disabled for now: heavyweight (builds fixture derivations live).
+  buildable: False
   import: tests
   hs-source-dirs: test
   build-depends: random
