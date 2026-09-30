@@ -1,7 +1,7 @@
 import Control.Monad.Trans.Writer.CPS (runWriterT)
 import Data.ByteString.Char8 qualified as ByteString
 import Data.Map.Strict qualified as Map
-import Data.Set (Set, singleton)
+import Data.Set (singleton)
 import Data.Set qualified as Set
 import Data.Strict qualified as Strict
 import Data.Time (UTCTime (..))
@@ -46,6 +46,7 @@ instance MonadReadDerivation TestM where
 
 instance MonadCacheBuildReports TestM where
   getCachedBuildReports = pure mempty
+  updateBuildReports updateFunc = pure (updateFunc mempty)
 
 instance MonadCheckStorePath TestM where
   subscribeStorePath _ _ = pure ()
