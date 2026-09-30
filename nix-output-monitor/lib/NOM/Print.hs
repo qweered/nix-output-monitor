@@ -575,6 +575,9 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
         resolvedNote = case Map.lookup drvInfo.name nomState.resolvedFrom of
           Just oldDrv -> [markup grey ("resolved from " <> Text.take 8 oldDrv.storePath.hash)]
           Nothing -> []
+        isDynamicOrResolved =
+          isJust (Map.lookup drvInfo.name nomState.resolvedFrom)
+            || any (== drvInfo.name) nomState.resolvedFrom
      in -- This code for printing info about every output proved to be to verbose. Keeping it in case we want something like that later on, maybe as an option.
         -- store_path_info_list =
         --  ((\(name, infos) now -> markups [bold, yellow] (running <> " " <> name <> " " <> down) <> " " <> markup magenta (disambiguate_transfer_host infos.host) <> clock <> " " <> timeDiff now infos.start) <$> store_paths_in_map drvInfo.dependencySummary.runningDownloads)
@@ -640,8 +643,14 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
                       )
                 , const Nothing
                 )
+            | isDynamicOrResolved -> (False, const $ unwords (markup magenta (resolved <> " " <> drvName) : resolvedNote), const Nothing)
             | otherwise -> (False, const $ unwords (drvName : resolvedNote), const Nothing)
-          Planned -> (True, const $ unwords (markup blue (todo <> " " <> drvName) : resolvedNote), const Nothing)
+          Planned ->
+            let statusMarkup =
+                  if isDynamicOrResolved
+                    then markup magenta (resolved <> " " <> drvName)
+                    else markup blue (todo <> " " <> drvName)
+             in (True, const $ unwords (statusMarkup : resolvedNote), const Nothing)
           Building buildInfo ->
             let phaseList = case phaseMay buildInfo.activityId of
                   Nothing -> []
@@ -672,18 +681,22 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
                 , const Nothing
                 )
           Built buildInfo ->
-            ( False
-            , const
-                $ markup green (done <> " " <> drvName)
-                <> " "
-                <> ( markup grey
-                       . unwords
-                       $ hostMarkup False buildInfo.host
-                       <> ifTimeDiffRelevant buildInfo.end buildInfo.start id
-                       <> resolvedNote
-                   )
-            , const Nothing
-            )
+            let statusMarkup =
+                  if isDynamicOrResolved
+                    then markup magenta (resolved <> " " <> drvName)
+                    else markup green (done <> " " <> drvName)
+             in ( False
+                , const
+                    $ statusMarkup
+                    <> " "
+                    <> ( markup grey
+                           . unwords
+                           $ hostMarkup False buildInfo.host
+                           <> ifTimeDiffRelevant buildInfo.end buildInfo.start id
+                           <> resolvedNote
+                       )
+                , const Nothing
+                )
 
 printPercent :: Double -> Text
 printPercent = markup bold . fromString . printf "%5.1f%%" . (* 100)
