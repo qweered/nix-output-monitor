@@ -374,7 +374,7 @@ lookupDerivation drv = do
 -- | Record a derivation whose .drv file is not in the local store as a
 -- cached leaf, so it shows up as a single node with no children and is
 -- never retried.
-markDerivationMissing :: (MonadNOMState m) => DerivationId -> ProcessingT m ()
+markDerivationMissing :: DerivationId -> ProcessingT m ()
 markDerivationMissing drvId = do
   noParents <- CSet.null . (.derivationParents) <$> getDerivationInfos drvId
   when noParents $ modifying' #forestRoots (CSet.insert drvId)

@@ -4,6 +4,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set (singleton)
 import Data.Set qualified as Set
 import Data.Strict qualified as Strict
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Encoding
 import Data.Time (UTCTime (..))
 import Data.Time.Calendar (Day (..))
 import NOM.Builds
@@ -15,6 +17,7 @@ import NOM.State (DerivationId, EvalInfo (..), NOMState (..), ProgressState (..)
 import NOM.State.CacheId.Set qualified as CSet
 import NOM.Update (insertDerivation, lookupDerivation)
 import NOM.Update.Monad
+import Optics (view)
 import NOM.Util (parseOne)
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -120,6 +123,12 @@ parentDrv = Derivation (StorePath "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "parent")
 
 childDrvPath :: FilePath
 childDrvPath = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-child.drv"
+
+utf8DrvText :: Text
+utf8DrvText = "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"PS1\",\"─ \")])"
+
+utf8RawBytes :: ByteString
+utf8RawBytes = Encoding.encodeUtf8 "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"X\",\"a" <> ByteString.singleton '\xff' <> "b\")])"
 
 main :: IO ()
 main = do
@@ -298,9 +307,15 @@ main = do
                 both = runWriterT (lookupDerivation remoteDrv >> lookupDerivation remoteDrv)
                 (remoteId, logged) = evalTest missingStub both
                 finalState = execTest missingStub both
-                (cachedFlag, _) = runTestOn finalState ((.cached) <$> getDerivationInfos remoteId)
+                (cachedFlag, _) = runTestOn finalState (view #cached <$> getDerivationInfos remoteId)
             assertEqual "no errors are emitted" [] logged
             assertEqual "the missing derivation is cached" True cachedFlag
             assertEqual "the missing derivation is a root leaf" [remoteId] (rootsOf finalState)
+        , "Parse derivation with UTF-8 content" ~: do
+            Right parsed <- pure (NomDrv.parseDerivationText (decodeUtf8With lenientDecode (Encoding.encodeUtf8 utf8DrvText)))
+            assertEqual "non-ASCII content survives" (Map.singleton "PS1" "─ ") parsed.env
+        , "Parse derivation with invalid bytes leniently" ~: do
+            Right parsed <- pure (NomDrv.parseDerivationText (decodeUtf8With lenientDecode utf8RawBytes))
+            assertEqual "invalid bytes become replacement chars" (Map.singleton "X" ("a" <> Text.singleton '\xFFFD' <> "b")) parsed.env
         ]
   if errors counts + failures counts == 0 then exitSuccess else exitFailure

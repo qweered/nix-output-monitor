@@ -13,8 +13,8 @@ import Control.Concurrent.STM (TChan, retry, tryReadTChan, writeTChan)
 import Control.Exception (mask, try)
 import Control.Monad.Trans.Writer.CPS (WriterT)
 import Data.Attoparsec.Text (parseOnly)
+import Data.ByteString qualified as ByteString
 import Data.Set qualified as Set
-import Data.Text.IO qualified as TextIO
 import Data.Time (UTCTime, getCurrentTime)
 import GHC.Clock qualified
 import NOM.Builds (Derivation, Host, HostContext (WithContext), StorePath)
@@ -51,11 +51,13 @@ class (Monad m) => MonadReadDerivation m where
   getDerivation :: Derivation -> m (Either NOMError NomDrv.Derivation)
 
 instance MonadReadDerivation IO where
+  -- .drv files are always UTF-8, but TextIO.readFile decodes with the
+  -- process locale and throws under a C locale: decode explicitly.
   getDerivation drv = do
-    content <- try (TextIO.readFile (toString drv))
+    content <- try (ByteString.readFile (toString drv))
     pure $ case content of
       Left err -> Left (DerivationReadError err)
-      Right text -> case parseOnly NomDrv.parseDerivation text of
+      Right bytes -> case parseOnly NomDrv.parseDerivation (decodeUtf8With lenientDecode bytes) of
         Left parseErr -> Left (DerivationParseError (toText drv <> ": " <> toText parseErr))
         Right parsed -> Right parsed
 
