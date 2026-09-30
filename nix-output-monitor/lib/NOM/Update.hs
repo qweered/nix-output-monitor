@@ -7,6 +7,9 @@ module NOM.Update (
   -- | Exposed for the unit-test regression suite.
   insertDerivation,
   lookupDerivation,
+  sweepRetiredDerivations,
+  resolveDerivation,
+  parseResolvedDerivation,
 ) where
 
 import Control.Monad.Trans.Writer.CPS (WriterT, runWriterT, tell)
@@ -101,6 +104,7 @@ maintainState now = execState $ do
     assign' #touchedIds mempty
   when (Strict.isJust currentState.evaluationState.lastFileName && currentState.evaluationState.at <= now - 5 && currentState.fullSummary /= mempty) do
     assign' (#evaluationState % #lastFileName) Strict.Nothing
+  sweepRetiredDerivations now
 
 {-# INLINE updateStateNixJSONMessage #-}
 updateStateNixJSONMessage :: forall m. (UpdateMonad m) => NixJSONMessage -> NOMState -> m (([NOMError], ByteString), Maybe NOMState)
@@ -277,14 +281,10 @@ processJsonMessage = \case
       JSON.Unknown | Text.isPrefixOf "querying info" startAction.text -> set_interesting
       JSON.QueryPathInfo{} -> set_interesting
       JSON.ResolvedDerivation original resolved -> withChange do
-        -- A content-addressed derivation resolved to its concrete twin. All
-        -- later events (build start/stop, failures) reference the twin,
-        -- while the plan ("will be built") announced the original — without
-        -- this link the original stays Planned forever and the twin shows
-        -- up as an unplanned build. Point the twin's name at the original's
-        -- id, so every subsequent lookup unifies the two.
-        originalId <- lookupDerivation original
-        modifying' #derivationIds $ Map.insert resolved originalId
+        resolveDerivation original resolved
+      JSON.BuildWaiting
+        | Just (oldDrv, newDrv) <- parseResolvedDerivation startAction.text -> withChange do
+            resolveDerivation oldDrv newDrv
       _ -> noChange -- tell [Right (encodeUtf8 (markup yellow "unused activity: " <> show startAction.id <> " " <> show startAction.activity))]
     when changed $ modifying' #activities $ Map.insert id'.value (MkActivityStatus startAction.activity startAction.parent Strict.Nothing Strict.Nothing)
     pure changed
@@ -464,12 +464,83 @@ insertDerivation derivation drvId = do
   when noParents $ modifying' #forestRoots (CSet.insert drvId)
 
 planBuilds :: (MonadNOMState m) => Set DerivationId -> m ()
-planBuilds drvIds = forM_ drvIds \drvId ->
-  updateDerivationState drvId (const Planned)
+planBuilds drvIds = do
+  -- Retired dynamic derivations never build: a late plan listing
+  -- must not resurrect them into pending.
+  retired <- gets (.retiredDerivations)
+  forM_ drvIds \drvId ->
+    unless (Map.member drvId retired) $ updateDerivationState drvId (const Planned)
 
 planDownloads :: (MonadNOMState m) => Set StorePathId -> m ()
 planDownloads pathIds = forM_ pathIds \pathId ->
   upsertStorePathState pathId DownloadPlanned (const Nothing)
+
+-- | How long a retired derivation shows as completed before it is swept.
+retiredTickSeconds :: Double
+retiredTickSeconds = 3
+
+-- | Parse nix's dynamic-derivation resolution notice:
+-- `resolved derivation: '<old>.drv' -> '<new>.drv'`.
+parseResolvedDerivation :: Text -> Maybe (Derivation, Derivation)
+parseResolvedDerivation message = do
+  rest <- Text.stripPrefix "resolved derivation: '" message
+  let (oldPath, arrowAndNew) = Text.breakOn "' -> '" rest
+  newPathQuoted <- Text.stripPrefix "' -> '" arrowAndNew
+  newPath <- Text.stripSuffix "'" newPathQuoted
+  guard (not (Text.null oldPath) && not (Text.null newPath))
+  oldDrv <- parseDerivation oldPath
+  newDrv <- parseDerivation newPath
+  pure (oldDrv, newDrv)
+
+-- | Retire a resolved dynamic derivation: the new node takes over the old
+-- one's graph position (dependents, and inputs when the new node has none
+-- of its own because its .drv file could not be read). A planned node
+-- additionally shows as completed for `retiredTickSeconds` so the handoff
+-- is perceptible instead of instant. Nodes that already started, failed
+-- or finished keep their status, only dependents move. Retired ids stay
+-- remembered so a late plan listing can not resurrect them.
+resolveDerivation :: Derivation -> Derivation -> ProcessingT m ()
+resolveDerivation oldDrv newDrv = do
+  oldDrvId <- getDerivationId oldDrv
+  newDrvId <- getDerivationId newDrv
+  when (oldDrvId /= newDrvId) do
+    now <- getNow
+    oldInfo <- getDerivationInfos oldDrvId
+    newInfo <- getDerivationInfos newDrvId
+    forM_ (CSet.toList oldInfo.derivationParents) \parentId ->
+      modifying' #derivationInfos $ CMap.adjust (#inputDerivations %~ fmap (swapInput oldDrvId newDrvId)) parentId
+    modifying' #derivationInfos $ CMap.adjust (#derivationParents %~ CSet.union oldInfo.derivationParents) newDrvId
+    when (newInfo.inputDerivations == mempty) do
+      modifying' #derivationInfos $ CMap.adjust (#inputDerivations .~ oldInfo.inputDerivations) newDrvId
+      forM_ (CSet.toList (childIds oldInfo)) \childId ->
+        modifying' #derivationInfos $ CMap.adjust (#derivationParents %~ CSet.insert newDrvId) childId
+    newParents <- (.derivationParents) <$> getDerivationInfos newDrvId
+    if CSet.null newParents
+      then modifying' #forestRoots $ CSet.insert newDrvId
+      else modifying' #forestRoots $ CSet.delete newDrvId
+    updateParents False (updateSummaryForDerivation Unknown newInfo.buildStatus newDrvId) id newParents
+    modifying' #touchedIds $ CSet.insert newDrvId
+    when (oldInfo.buildStatus == Planned) do
+      updateDerivationState oldDrvId (const (Built (MkBuildInfo now Localhost Strict.Nothing Strict.Nothing now)))
+    modifying' #retiredDerivations $ Map.insert oldDrvId (now + retiredTickSeconds)
+    modifying' #resolvedFrom $ Map.insert newDrv oldDrv
+ where
+  swapInput oldId newId input = if input.derivation == oldId then input{derivation = newId} else input
+  childIds info = CSet.fromFoldable (fmap (.derivation) info.inputDerivations)
+
+-- | Sweep retired derivations whose tick expired: drop them. Runs every
+-- frame from `maintainState`, so ticks vanish on time even when idle.
+sweepRetiredDerivations :: Double -> State NOMState ()
+sweepRetiredDerivations now = do
+  retired <- gets (.retiredDerivations)
+  forM_ (Map.toList retired) \(drvId, expiry) -> when (expiry <= now) do
+    info <- getDerivationInfos drvId
+    case info.buildStatus of
+      Building _ -> pure ()
+      Failed _ -> pure ()
+      _ -> do
+        updateDerivationState drvId (const Unknown)
+        modifying' #forestRoots $ CSet.delete drvId
 
 finishBuildByDrvId :: Host WithContext -> DerivationId -> ProcessingT m ()
 finishBuildByDrvId host drvId = do
@@ -520,6 +591,11 @@ building host drvName now activityId = do
   reportName <- getReportName <$> lookupDerivationInfos drvName
   lastNeeded <- (median <=< Map.lookup (forgetProto host, reportName)) . (.buildReports) <$> get
   drvId <- lookupDerivation drvName
+  nomState <- get
+  whenJust (Map.lookup drvName nomState.resolvedFrom) \oldDrv -> do
+    oldDrvId <- getDerivationId oldDrv
+    updateDerivationState oldDrvId (const Unknown)
+    modifying' #forestRoots $ CSet.delete oldDrvId
   updateDerivationState drvId
     $ Building
     . \case

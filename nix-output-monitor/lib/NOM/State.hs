@@ -258,6 +258,12 @@ data NOMState = MkNOMState
   , buildPlatform :: Strict.Maybe Text
   , interestingActivities :: Map Word InterestingActivity
   , evaluationState :: EvalInfo
+  -- Retired dynamic derivations: id -> tick expiry time. Entries
+  -- persist so a late plan listing can not resurrect them; the tick
+  -- itself is swept by `sweepRetiredDerivations` in `maintainState`.
+  , retiredDerivations :: Map DerivationId Double
+  -- Resolution provenance for the row annotation: new -> old.
+  , resolvedFrom :: Map Derivation Derivation
   }
   deriving stock (Eq, Show)
 

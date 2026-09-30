@@ -20,8 +20,8 @@ import NOM.Print.Table (markup, red)
 import NOM.State (DependencySummary (..), NOMState (..), ProgressState (..))
 import NOM.State.CacheId.Map qualified as CMap
 import NOM.State.Initial (initialStateFromBuildPlatform)
-import NOM.Update (checkFinishedBuilds, maintainState)
-import NOM.Update.Monad (UpdateMonad)
+import NOM.Update (checkFinishedBuilds, maintainState, sweepRetiredDerivations)
+import NOM.Update.Monad (MonadNow (getNow), UpdateMonad)
 import Optics ((%~), (.~))
 import Optics.TH (makeFieldLabelsNoPrefix)
 import Paths_nix_output_monitor (version)
@@ -220,7 +220,9 @@ finalizer ::
   StateT ProcessState m ()
 finalizer config = do
   old_state <- get
-  newState <- (#progressState .~ Finished) <$> execStateT (runWriterT checkFinishedBuilds) old_state.updaterState
+  now <- getNow
+  let swept = execState (sweepRetiredDerivations (now + 10000)) old_state.updaterState
+  newState <- (#progressState .~ Finished) <$> execStateT (runWriterT checkFinishedBuilds) swept
   put
     MkProcessState
       { updaterState = newState

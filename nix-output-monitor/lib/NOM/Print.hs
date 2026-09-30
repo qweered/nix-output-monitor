@@ -58,7 +58,7 @@ import Text.Printf (printf)
 showCode :: Text -> [String]
 showCode = map (printf "%02X" . fromEnum) . toString
 
-vertical, lowerleft, upperleft, horizontal, down, up, clock, running, done, bigsum, warning, todo, goal, leftT, average :: Text
+vertical, lowerleft, upperleft, horizontal, down, up, clock, running, done, bigsum, warning, todo, resolved, leftT, average :: Text
 targetRatio, defaultTreeMax, defaultTreeWidth :: Int
 
 -- | U+2503 BOX DRAWINGS HEAVY VERTICAL
@@ -94,8 +94,8 @@ done = "✔"
 -- | U+23F8 DOUBLE VERTICAL BAR
 todo = "⏸"
 
--- | U+2691 BLACK FLAG — the goal: all builds known so far
-goal = "⚑"
+-- | U+21C4 LEFT RIGHT ARROW, dynamic derivations resolved upstream
+resolved = "⇄"
 
 -- | U+26A0 WARNING SIGN
 warning = "⚠"
@@ -233,15 +233,10 @@ stateToText config buildState@MkNOMState{..} = printWithSize
   partial_last_row =
     showCond
       showBuilds
-      [ -- Reading left to right tells the pipeline story: running, waiting,
-        -- done, and the goal — the total known so far (planned + running +
-        -- completed + failed), which may still grow while evaluation
-        -- discovers more work (IFD), so it is a "known so far", not a
-        -- promise.
-        yellow $ nonZeroBold running numRunningBuilds
+      [ yellow $ nonZeroBold running numRunningBuilds
       , blue $ nonZeroBold todo numPlannedBuilds
       , green $ nonZeroBold done numCompletedBuilds
-      , magenta $ nonZeroBold goal totalBuildsEver
+      , magenta $ nonZeroBold resolved numResolvedBuilds
       ]
       <> showCond
         showDownloads
@@ -272,8 +267,8 @@ stateToText config buildState@MkNOMState{..} = printWithSize
   numRunningBuilds = CMap.size runningBuilds
   numCompletedBuilds = CMap.size completedBuilds
   numPlannedBuilds = CSet.size plannedBuilds
-  totalBuilds = numPlannedBuilds + numRunningBuilds + numCompletedBuilds
-  totalBuildsEver = numPlannedBuilds + numRunningBuilds + numCompletedBuilds + numFailedBuilds
+  numResolvedBuilds = Map.size retiredDerivations
+  totalBuilds = numPlannedBuilds + numRunningBuilds + numCompletedBuilds + numResolvedBuilds
   downloadsDone = CMap.size completedDownloads
   downloadsRunning = CMap.size runningDownloads
   uploadsRunning = CMap.size runningUploads
@@ -577,6 +572,9 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
         plannedDownloads = store_paths_in drvInfo.dependencySummary.plannedDownloads
         downloadedOutputs = store_paths_in_map drvInfo.dependencySummary.completedDownloads
         uploadedOutputs = store_paths_in_map drvInfo.dependencySummary.completedUploads
+        resolvedNote = case Map.lookup drvInfo.name nomState.resolvedFrom of
+          Just oldDrv -> [markup grey ("resolved from " <> Text.take 8 oldDrv.storePath.hash)]
+          Nothing -> []
      in -- This code for printing info about every output proved to be to verbose. Keeping it in case we want something like that later on, maybe as an option.
         -- store_path_info_list =
         --  ((\(name, infos) now -> markups [bold, yellow] (running <> " " <> name <> " " <> down) <> " " <> markup magenta (disambiguate_transfer_host infos.host) <> clock <> " " <> timeDiff now infos.start) <$> store_paths_in_map drvInfo.dependencySummary.runningDownloads)
@@ -642,8 +640,8 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
                       )
                 , const Nothing
                 )
-            | otherwise -> (False, const drvName, const Nothing)
-          Planned -> (True, const $ markup blue (todo <> " " <> drvName), const Nothing)
+            | otherwise -> (False, const $ unwords (drvName : resolvedNote), const Nothing)
+          Planned -> (True, const $ unwords (markup blue (todo <> " " <> drvName) : resolvedNote), const Nothing)
           Building buildInfo ->
             let phaseList = case phaseMay buildInfo.activityId of
                   Nothing -> []
@@ -655,7 +653,7 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
                 after_time = Strict.maybe [] (\x -> ["(" <> average <> " " <> timeDiffSeconds x <> ")"]) buildInfo.estimate
                 (transfer_percentage, transfer_progress) = printTransferProgress (transfersMay buildInfo.activityId)
              in ( False
-                , \now -> unwords $ before_time <> ifTimeDiffRelevant now buildInfo.start (<> after_time) <> transfer_progress
+                , \now -> unwords $ before_time <> ifTimeDiffRelevant now buildInfo.start (<> after_time) <> transfer_progress <> resolvedNote
                 , const transfer_percentage
                 )
           Failed buildInfo ->
@@ -682,6 +680,7 @@ printBuilds nomState@MkNOMState{..} hostAbbrevs limits = printBuildsWithTime
                        . unwords
                        $ hostMarkup False buildInfo.host
                        <> ifTimeDiffRelevant buildInfo.end buildInfo.start id
+                       <> resolvedNote
                    )
             , const Nothing
             )

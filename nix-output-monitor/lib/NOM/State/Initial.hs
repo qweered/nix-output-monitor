@@ -27,3 +27,5 @@ initialStateFromBuildPlatform platform = do
       (Strict.toStrict platform)
       mempty
       MkEvalInfo{count = 0, at = 0, lastFileName = Strict.Nothing}
+      mempty
+      mempty

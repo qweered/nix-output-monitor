@@ -15,7 +15,7 @@ import NOM.Error (NOMError (..))
 import NOM.NixMessage.JSON qualified as JSON
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
-import NOM.State (DerivationId, EvalInfo (..), NOMState (..), ProgressState (..), getDerivationId, getDerivationInfos)
+import NOM.State (DependencySummary (..), DerivationId, EvalInfo (..), NOMState (..), ProgressState (..), getDerivationId, getDerivationInfos)
 import NOM.State.CacheId.Set qualified as CSet
 import NOM.Update (insertDerivation, lookupDerivation, updateStateNixJSONMessage)
 import NOM.Update.Monad
@@ -91,6 +91,8 @@ emptyTestState =
     , buildPlatform = Strict.Nothing
     , interestingActivities = mempty
     , evaluationState = MkEvalInfo{count = 0, at = 0, lastFileName = Strict.Nothing}
+    , retiredDerivations = mempty
+    , resolvedFrom = mempty
     }
 
 -- | Register a derivation (with the given file contents) and return its id.
@@ -142,6 +144,15 @@ testStart wid parent activity =
       , JSON.level = JSON.Notice
       , JSON.text = ""
       , JSON.activity = activity
+      }
+
+-- | A JSON message announcing a planned derivation.
+testPlanLine :: Derivation -> JSON.NixJSONMessage
+testPlanLine drv =
+  JSON.Message
+    JSON.MkMessageAction
+      { JSON.level = JSON.Info
+      , JSON.message = "  " <> toText drv
       }
 
 -- | Feed JSON messages through the update, threading the state.
@@ -355,6 +366,15 @@ main = do
                     okStub
                     (feedMessages [testStart 15 Nothing (JSON.QueryPathInfo (StorePath "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" "query") Localhost), testStart 13 (Just 15) (JSON.FileTransfer "https://example.com/file")])
             assertBool "non-build transfer is ignored" (not (Map.member 13 ((.activities) finalState)))
+        , "Resolved derivation retires old node and clears pending" ~: do
+            let resolvedDrv = Derivation (StorePath "ffffffffffffffffffffffffffffffff" "resolved")
+                finalState =
+                  execTest
+                    okStub
+                    (feedMessages [testPlanLine parentDrv, testStart 1 Nothing (JSON.ResolvedDerivation parentDrv resolvedDrv)])
+            assertBool "planned builds drained" (CSet.null finalState.fullSummary.plannedBuilds)
+            assertEqual "derivation retired" 1 (Map.size finalState.retiredDerivations)
+            assertEqual "provenance recorded" (Just parentDrv) (Map.lookup resolvedDrv finalState.resolvedFrom)
         , "Parse derivation with UTF-8 content" ~: do
             Right parsed <- pure (NomDrv.parseDerivationText (decodeUtf8With lenientDecode (Encoding.encodeUtf8 utf8DrvText)))
             assertEqual "non-ASCII content survives" (Map.singleton "PS1" "─ ") parsed.env
