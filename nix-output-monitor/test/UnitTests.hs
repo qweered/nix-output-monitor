@@ -1,7 +1,8 @@
 import Control.Monad.Trans.Writer.CPS (runWriterT)
 import Data.ByteString.Char8 qualified as ByteString
 import Data.Map.Strict qualified as Map
-import Data.Set (Set, fromList, singleton)
+import Data.Set (Set, singleton)
+import Data.Set qualified as Set
 import Data.Strict qualified as Strict
 import Data.Time (UTCTime (..))
 import Data.Time.Calendar (Day (..))
@@ -9,14 +10,14 @@ import NOM.Builds
 import NOM.Derivation qualified as NomDrv
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
-import NOM.State
+import NOM.State (DerivationId, EvalInfo (..), NOMState (..), ProgressState (..), getDerivationId)
 import NOM.State.CacheId.Set qualified as CSet
 import NOM.Update (insertDerivation)
 import NOM.Update.Monad
 import NOM.Util (parseOne)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.HUnit
+import Test.HUnit hiding (State)
 
 assertOldStyleParse :: ByteString -> IO (ByteString, NixOldStyleMessage)
 assertOldStyleParse input = do
@@ -251,14 +252,14 @@ main = do
               (NomDrv.parseDerivationText "Derive([(\"out\",\"\",\"r:sha256\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
         , "Parse impure derivation" ~: do
             Right parsed <- pure (NomDrv.parseDerivationText "Derive([(\"out\",\"\",\"r:sha256\",\"impure\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
-            assertEqual "impure outputs have no known path" Nothing (NomDrv.outputPath =<< Map.lookup "out" (NomDrv.outputs parsed))
+            assertEqual "impure outputs have no known path" Nothing (NomDrv.outputPath =<< Map.lookup "out" parsed.outputs)
         , "Parse DrvWithVersion with dynamic inputDrvs" ~: do
             assertEqual
               "nested uses flatten into a single set"
               ( Right
                   NomDrv.Derivation
                     { NomDrv.outputs = Map.singleton "out" (NomDrv.DerivationOutput (Just "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-top") "" "")
-                    , NomDrv.inputDrvs = Map.singleton "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dep.drv" (fromList ["bar", "foo", "out"])
+                    , NomDrv.inputDrvs = Map.singleton "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dep.drv" (Set.fromList ["bar", "foo", "out"])
                     , NomDrv.inputSrcs = mempty
                     , NomDrv.platform = "x86_64-linux"
                     , NomDrv.builder = "/bin/bash"
@@ -268,9 +269,7 @@ main = do
               )
               (NomDrv.parseDerivationText "DrvWithVersion(\"xp-dyn-drv\",[(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-top\",\"\",\"\")],[(\"/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dep.drv\",([\"out\"],[(\"foo\",[\"bar\"])]))],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
         , "Parse derivation escapes" ~: do
-            assertEqual
-              "escapes decode"
-              (Right (Map.singleton "GREETING" "hello\nworld"))
-              (NomDrv.env <$> NomDrv.parseDerivationText "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"GREETING\",\"hello\\nworld\")])")
+            Right parsed <- pure (NomDrv.parseDerivationText "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"GREETING\",\"hello\\nworld\")])")
+            assertEqual "escapes decode" (Map.singleton "GREETING" "hello\nworld") parsed.env
         ]
   if errors counts + failures counts == 0 then exitSuccess else exitFailure

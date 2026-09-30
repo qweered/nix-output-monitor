@@ -154,8 +154,7 @@ escapes, matching Nix\'s ATerm printer.
 textParser :: AT.Parser Text
 textParser = do
   void (AT.char '"')
-  chunks <- go
-  pure (Text.concat chunks)
+  Text.concat <$> go
  where
   go :: AT.Parser [Text]
   go = do
