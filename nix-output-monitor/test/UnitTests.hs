@@ -1,3 +1,4 @@
+import Control.Monad (foldM)
 import Control.Monad.Trans.Writer.CPS (runWriterT)
 import Data.ByteString.Char8 qualified as ByteString
 import Data.Map.Strict qualified as Map
@@ -11,14 +12,15 @@ import Data.Time.Calendar (Day (..))
 import NOM.Builds
 import NOM.Derivation qualified as NomDrv
 import NOM.Error (NOMError (..))
+import NOM.NixMessage.JSON qualified as JSON
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
 import NOM.State (DerivationId, EvalInfo (..), NOMState (..), ProgressState (..), getDerivationId, getDerivationInfos)
 import NOM.State.CacheId.Set qualified as CSet
-import NOM.Update (insertDerivation, lookupDerivation)
+import NOM.Update (insertDerivation, lookupDerivation, updateStateNixJSONMessage)
 import NOM.Update.Monad
-import Optics (view)
 import NOM.Util (parseOne)
+import Optics (view)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.IO.Error qualified as IOError
@@ -129,6 +131,30 @@ utf8DrvText = "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-fo
 
 utf8RawBytes :: ByteString
 utf8RawBytes = Encoding.encodeUtf8 "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"X\",\"a" <> ByteString.singleton '\xff' <> "b\")])"
+
+-- | A JSON start message for tests.
+testStart :: Word -> Maybe Word -> JSON.Activity -> JSON.NixJSONMessage
+testStart wid parent activity =
+  JSON.Start
+    JSON.MkStartAction
+      { JSON.id = JSON.MkId wid
+      , JSON.parent = JSON.MkId <$> parent
+      , JSON.level = JSON.Notice
+      , JSON.text = ""
+      , JSON.activity = activity
+      }
+
+-- | Feed JSON messages through the update, threading the state.
+feedMessages :: [JSON.NixJSONMessage] -> TestM NOMState
+feedMessages msgs = do
+  s0 <- get
+  final <- foldM step s0 msgs
+  put final
+  pure final
+ where
+  step testState msg = do
+    (_, maybeState) <- updateStateNixJSONMessage msg testState
+    pure (fromMaybe testState maybeState)
 
 main :: IO ()
 main = do
@@ -311,6 +337,24 @@ main = do
             assertEqual "no errors are emitted" [] logged
             assertEqual "the missing derivation is cached" True cachedFlag
             assertEqual "the missing derivation is a root leaf" [remoteId] (rootsOf finalState)
+        , "FileTransfer under a build is tracked" ~: do
+            let finalState =
+                  execTest
+                    okStub
+                    (feedMessages [testStart 7 Nothing (JSON.Build parentDrv Localhost), testStart 11 (Just 7) (JSON.FileTransfer "https://example.com/file")])
+            assertBool "directly nested transfer is tracked" (Map.member 11 ((.activities) finalState))
+        , "FileTransfer below a build through intermediaries is tracked" ~: do
+            let finalState =
+                  execTest
+                    okStub
+                    (feedMessages [testStart 7 Nothing (JSON.Build parentDrv Localhost), testStart 9 (Just 7) (JSON.QueryPathInfo (StorePath "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" "query") Localhost), testStart 11 (Just 9) (JSON.FileTransfer "https://example.com/file")])
+            assertBool "transitively nested transfer is tracked" (Map.member 11 ((.activities) finalState))
+        , "FileTransfer outside any build is ignored" ~: do
+            let finalState =
+                  execTest
+                    okStub
+                    (feedMessages [testStart 15 Nothing (JSON.QueryPathInfo (StorePath "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" "query") Localhost), testStart 13 (Just 15) (JSON.FileTransfer "https://example.com/file")])
+            assertBool "non-build transfer is ignored" (not (Map.member 13 ((.activities) finalState)))
         , "Parse derivation with UTF-8 content" ~: do
             Right parsed <- pure (NomDrv.parseDerivationText (decodeUtf8With lenientDecode (Encoding.encodeUtf8 utf8DrvText)))
             assertEqual "non-ASCII content survives" (Map.singleton "PS1" "─ ") parsed.env

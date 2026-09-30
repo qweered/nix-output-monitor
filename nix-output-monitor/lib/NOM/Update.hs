@@ -186,6 +186,19 @@ processResult result = do
       drvId <- lookupDerivation drv
       failedBuild now drvId code
 
+{- | Whether an activity descends from a build, following parent links the
+way nix's own hasAncestor check does. A FileTransfer nested anywhere
+below a build was reported by the builder itself (e.g. a fixed-output
+derivation fetching its source).
+-}
+hasBuildAncestor :: Map Word ActivityStatus -> Maybe ActivityId -> Bool
+hasBuildAncestor _ Nothing = False
+hasBuildAncestor knownActivities (Just parentId) =
+  case Map.lookup parentId.value knownActivities of
+    Just MkActivityStatus{activity = JSON.Build{}} -> True
+    Just MkActivityStatus{parent = grandparent} -> hasBuildAncestor knownActivities grandparent
+    Nothing -> False
+
 processJsonMessage :: NixJSONMessage -> ProcessingT m Bool
 processJsonMessage = \case
   Message MkMessageAction{message, level} | level <= Info && level > Error -> do
@@ -252,6 +265,15 @@ processJsonMessage = \case
         now <- getNow
         pathId <- getStorePathId path
         uploading to pathId now (Just id')
+      -- Nix nests every transfer under the activity which requested it.
+      -- Only builder-reported ones belong on a build row; transfers nix
+      -- performs on its own behalf nest under a substitution instead and
+      -- are already accounted for in the downloads column.
+      JSON.FileTransfer{} -> do
+        activities' <- gets (.activities)
+        if hasBuildAncestor activities' startAction.parent
+          then withChange pass
+          else noChange
       JSON.Unknown | Text.isPrefixOf "querying info" startAction.text -> set_interesting
       JSON.QueryPathInfo{} -> set_interesting
       JSON.ResolvedDerivation original resolved -> withChange do
@@ -264,7 +286,7 @@ processJsonMessage = \case
         originalId <- lookupDerivation original
         modifying' #derivationIds $ Map.insert resolved originalId
       _ -> noChange -- tell [Right (encodeUtf8 (markup yellow "unused activity: " <> show startAction.id <> " " <> show startAction.activity))]
-    when changed $ modifying' #activities $ Map.insert id'.value (MkActivityStatus startAction.activity Strict.Nothing Strict.Nothing)
+    when changed $ modifying' #activities $ Map.insert id'.value (MkActivityStatus startAction.activity startAction.parent Strict.Nothing Strict.Nothing)
     pure changed
   Stop MkStopAction{id = id'} -> do
     activity <- preuse (#activities % ix id'.value)
@@ -361,19 +383,21 @@ lookupDerivation drv = do
   unless isCached
     $ getDerivation drv
     >>= \case
-      Left (DerivationReadError err) | IOError.isDoesNotExistError err ->
-        -- The .drv lives on a remote store (--store ssh-ng://... with
-        -- --eval-store auto): there is nothing local to expand into the
-        -- dependency graph. Record a leaf node and stay quiet; without
-        -- marking cached every later event would retry and re-emit.
-        markDerivationMissing drvId
+      Left (DerivationReadError err)
+        | IOError.isDoesNotExistError err ->
+            -- The .drv lives on a remote store (--store ssh-ng://... with
+            -- --eval-store auto): there is nothing local to expand into the
+            -- dependency graph. Record a leaf node and stay quiet; without
+            -- marking cached every later event would retry and re-emit.
+            markDerivationMissing drvId
       Left err -> tell [Left err]
       Right parsedDrv -> insertDerivation parsedDrv drvId
   pure drvId
 
--- | Record a derivation whose .drv file is not in the local store as a
--- cached leaf, so it shows up as a single node with no children and is
--- never retried.
+{- | Record a derivation whose .drv file is not in the local store as a
+cached leaf, so it shows up as a single node with no children and is
+never retried.
+-}
 markDerivationMissing :: DerivationId -> ProcessingT m ()
 markDerivationMissing drvId = do
   noParents <- CSet.null . (.derivationParents) <$> getDerivationInfos drvId
