@@ -76,7 +76,6 @@ common common-config
     filepath,
     fsnotify,
     hermes-json >=0.6.0.0,
-    nix-derivation,
     optics,
     relude,
     safe,
@@ -117,6 +116,7 @@ library
   exposed-modules:
     Data.Sequence.Strict
     NOM.Builds
+    NOM.Derivation
     NOM.Error
     NOM.IO
     NOM.IO.Input

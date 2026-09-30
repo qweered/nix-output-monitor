@@ -5,7 +5,7 @@ import Data.Set (Set, singleton)
 import Data.Strict qualified as Strict
 import Data.Time (UTCTime (..))
 import Data.Time.Calendar (Day (..))
-import Nix.Derivation qualified as Nix
+import NOM.Derivation qualified as NomDrv
 import NOM.Builds
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
@@ -47,16 +47,16 @@ instance MonadCheckStorePath TestM where
   foundStorePaths = pure []
 
 -- | Derivation file contents for tests, parameterised over derivation inputs.
-testDerivation :: Map FilePath (Set Text) -> Nix.Derivation FilePath Text
+testDerivation :: Map FilePath (Set Text) -> NomDrv.Derivation
 testDerivation deps =
-  Nix.Derivation
-    { Nix.outputs = mempty
-    , Nix.inputDrvs = deps
-    , Nix.inputSrcs = mempty
-    , Nix.platform = ""
-    , Nix.builder = ""
-    , Nix.args = mempty
-    , Nix.env = mempty
+  NomDrv.Derivation
+    { NomDrv.outputs = mempty
+    , NomDrv.inputDrvs = deps
+    , NomDrv.inputSrcs = mempty
+    , NomDrv.platform = ""
+    , NomDrv.builder = ""
+    , NomDrv.args = mempty
+    , NomDrv.env = mempty
     }
 
 emptyTestState :: NOMState
@@ -81,7 +81,7 @@ emptyTestState =
     }
 
 -- | Register a derivation (with the given file contents) and return its id.
-insertTestDerivation :: Nix.Derivation FilePath Text -> Derivation -> TestM DerivationId
+insertTestDerivation :: NomDrv.Derivation -> Derivation -> TestM DerivationId
 insertTestDerivation parsed drv = do
   drvId <- getDerivationId drv
   void (runWriterT (insertDerivation parsed drvId))

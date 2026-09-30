@@ -71,7 +71,7 @@ import NOM.Update.Monad (
   UpdateMonad,
  )
 import NOM.Util (parseOneText, repeatedly)
-import Nix.Derivation qualified as Nix
+import NOM.Derivation qualified as NomDrv
 import Numeric.Extra (intToDouble)
 import Optics (Ixed (..), assign', has, modifying', preuse, preview, (%), (%~), (.~))
 import Relude
@@ -368,19 +368,24 @@ lookupDerivationInfos drvName = do
   drvId <- lookupDerivation drvName
   getDerivationInfos drvId
 
-insertDerivation :: Nix.Derivation FilePath Text -> DerivationId -> ProcessingT m ()
+insertDerivation :: NomDrv.Derivation -> DerivationId -> ProcessingT m ()
 insertDerivation derivation drvId = do
-  -- We need to be really careful in this function. The Nix.Derivation keeps the
-  -- read-in derivation file in memory. When using Texts from it we must make
+  -- We need to be really careful in this function. The derivation file content
+  -- is kept in memory by the parser. When using Texts from it we must make
   -- sure we destroy sharing with the original file, so that it can be garbage
   -- collected.
 
   outputs <-
-    derivation.outputs & Map.mapKeys (parseOutputName . Text.copy) & Map.traverseMaybeWithKey \_ path ->
-      parseStorePath (toText (Nix.path path)) & mapM \pathName -> do
-        pathId <- getStorePathId pathName
-        modifying' #storePathInfos $ CMap.adjust (#producer .~ Strict.Just drvId) pathId
-        pure pathId
+    derivation.outputs & Map.mapKeys (parseOutputName . Text.copy) & Map.traverseMaybeWithKey \_ drvOutput ->
+      case NomDrv.outputPath drvOutput of
+        -- Floating CA, deferred and impure outputs have no known store path
+        -- yet. Skipping them is correct: there is nothing to wait for.
+        Nothing -> pure Nothing
+        Just path ->
+          parseStorePath (toText path) & mapM \pathName -> do
+            pathId <- getStorePathId pathName
+            modifying' #storePathInfos $ CMap.adjust (#producer .~ Strict.Just drvId) pathId
+            pure pathId
   inputSources <-
     derivation.inputSrcs & flip foldlM mempty \acc path -> do
       pathIdMay <-

@@ -12,16 +12,16 @@ import Control.Concurrent.Async (async, link)
 import Control.Concurrent.STM (TChan, retry, tryReadTChan, writeTChan)
 import Control.Exception (mask, try)
 import Control.Monad.Trans.Writer.CPS (WriterT)
-import Data.Attoparsec.Text (eitherResult, parse)
+import Data.Attoparsec.Text (parseOnly)
 import Data.Set qualified as Set
 import Data.Text.IO qualified as TextIO
 import Data.Time (UTCTime, getCurrentTime)
 import GHC.Clock qualified
 import NOM.Builds (Derivation, Host, HostContext (WithContext), StorePath)
+import NOM.Derivation qualified as NomDrv
 import NOM.Error (NOMError (..))
 import NOM.State (DerivationId)
 import NOM.Update.Monad.CacheBuildReports
-import Nix.Derivation qualified as Nix
 import Relude
 import System.Directory (doesPathExist)
 
@@ -48,19 +48,16 @@ instance (MonadNow m) => MonadNow (ReaderT a m) where
   getUTC = lift getUTC
 
 class (Monad m) => MonadReadDerivation m where
-  getDerivation :: Derivation -> m (Either NOMError (Nix.Derivation FilePath Text))
+  getDerivation :: Derivation -> m (Either NOMError NomDrv.Derivation)
 
 instance MonadReadDerivation IO where
-  getDerivation =
-    fmap
-      ( first DerivationReadError
-          >=> first (DerivationParseError . toText)
-          . eitherResult
-          . parse Nix.parseDerivation
-      )
-      . try
-      . TextIO.readFile
-      . toString
+  getDerivation drv = do
+    content <- try (TextIO.readFile (toString drv))
+    pure $ case content of
+      Left err -> Left (DerivationReadError err)
+      Right text -> case parseOnly NomDrv.parseDerivation text of
+        Left parseErr -> Left (DerivationParseError (toText drv <> ": " <> toText parseErr))
+        Right parsed -> Right parsed
 
 instance (MonadReadDerivation m) => MonadReadDerivation (StateT a m) where
   getDerivation = lift . getDerivation
