@@ -8,15 +8,17 @@ import Data.Time (UTCTime (..))
 import Data.Time.Calendar (Day (..))
 import NOM.Builds
 import NOM.Derivation qualified as NomDrv
+import NOM.Error (NOMError (..))
 import NOM.NixMessage.OldStyle (NixOldStyleMessage (..))
 import NOM.Parser
-import NOM.State (DerivationId, EvalInfo (..), NOMState (..), ProgressState (..), getDerivationId)
+import NOM.State (DerivationId, EvalInfo (..), NOMState (..), ProgressState (..), getDerivationId, getDerivationInfos)
 import NOM.State.CacheId.Set qualified as CSet
-import NOM.Update (insertDerivation)
+import NOM.Update (insertDerivation, lookupDerivation)
 import NOM.Update.Monad
 import NOM.Util (parseOne)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.IO.Error qualified as IOError
 import Test.HUnit hiding (State)
 
 assertOldStyleParse :: ByteString -> IO (ByteString, NixOldStyleMessage)
@@ -28,21 +30,21 @@ assertOldStyleParse input = do
   pure (t, Unsafe.fromJust res')
 
 {- | Pure stub for the 'UpdateMonad' constraints, allowing tests to drive
-'insertDerivation' without touching the real Nix store: derivation file
-reads always resolve to the same input-free derivation.
+'insertDerivation' and 'lookupDerivation' without touching the real Nix
+store: derivation file reads answer from the environment.
 -}
-newtype TestM a = TestM (State NOMState a)
-  deriving newtype (Functor, Applicative, Monad, MonadState NOMState)
+newtype TestM a = TestM (ReaderT (Either NOMError NomDrv.Derivation) (State NOMState) a)
+  deriving newtype (Functor, Applicative, Monad, MonadState NOMState, MonadReader (Either NOMError NomDrv.Derivation))
 
-runTestM :: TestM a -> State NOMState a
-runTestM (TestM testState) = testState
+runTestM :: Either NOMError NomDrv.Derivation -> TestM a -> State NOMState a
+runTestM stub (TestM action) = runReaderT action stub
 
 instance MonadNow TestM where
   getNow = pure 0
   getUTC = pure (UTCTime (ModifiedJulianDay 0) 0)
 
 instance MonadReadDerivation TestM where
-  getDerivation _ = pure (Right (testDerivation mempty))
+  getDerivation _ = ask
 
 instance MonadCacheBuildReports TestM where
   getCachedBuildReports = pure mempty
@@ -93,11 +95,18 @@ insertTestDerivation parsed drv = do
   void (runWriterT (insertDerivation parsed drvId))
   pure drvId
 
-evalTest :: TestM a -> a
-evalTest = flip evalState emptyTestState . runTestM
+-- | The stub answer for successful derivation reads.
+okStub :: Either NOMError NomDrv.Derivation
+okStub = Right (testDerivation mempty)
 
-execTest :: TestM a -> NOMState
-execTest = flip execState emptyTestState . runTestM
+evalTest :: Either NOMError NomDrv.Derivation -> TestM a -> a
+evalTest stub action = evalState (runTestM stub action) emptyTestState
+
+execTest :: Either NOMError NomDrv.Derivation -> TestM a -> NOMState
+execTest stub action = execState (runTestM stub action) emptyTestState
+
+runTestOn :: NOMState -> TestM a -> (a, NOMState)
+runTestOn testState action = runState (runTestM okStub action) testState
 
 -- | Roots of the dependency forest in a finished test state.
 rootsOf :: NOMState -> [DerivationId]
@@ -216,13 +225,13 @@ main = do
               (Failed (Derivation $ StorePath "d055cqki6z1vll144kvj496cknwvwi44" "build-fail") (ExitCode 1))
               result
         , "Forest roots deduplicate reinserted derivations" ~: do
-            let expected = evalTest (getDerivationId rootDrv)
-                finalRoots = rootsOf (execTest (insertTestDerivation (testDerivation mempty) rootDrv >> insertTestDerivation (testDerivation mempty) rootDrv))
+            let expected = evalTest okStub (getDerivationId rootDrv)
+                finalRoots = rootsOf (execTest okStub (insertTestDerivation (testDerivation mempty) rootDrv >> insertTestDerivation (testDerivation mempty) rootDrv))
             assertEqual "reinserting a root keeps a single entry" [expected] finalRoots
         , "Forest roots keep only the topmost derivation" ~: do
             let parentWithChild = testDerivation (Map.singleton childDrvPath (singleton "out"))
-                expected = evalTest (getDerivationId parentDrv)
-                finalRoots = rootsOf (execTest (insertTestDerivation parentWithChild parentDrv))
+                expected = evalTest okStub (getDerivationId parentDrv)
+                finalRoots = rootsOf (execTest okStub (insertTestDerivation parentWithChild parentDrv))
             assertEqual "the child is rewired below its parent" [expected] finalRoots
         , "Parse input-addressed derivation" ~: do
             assertEqual
@@ -282,5 +291,16 @@ main = do
               "remote hosts keep parsing"
               (Host (Just "ssh-ng") Nothing "example.com")
               (parseHost "ssh-ng://example.com")
+        , "Missing remote derivations become quiet leaves" ~: do
+            let enoent = IOError.mkIOError IOError.doesNotExistErrorType "openFile" Nothing Nothing
+                remoteDrv = Derivation (StorePath "dddddddddddddddddddddddddddddddd" "remote")
+                missingStub = Left (DerivationReadError enoent)
+                both = runWriterT (lookupDerivation remoteDrv >> lookupDerivation remoteDrv)
+                (remoteId, logged) = evalTest missingStub both
+                finalState = execTest missingStub both
+                (cachedFlag, _) = runTestOn finalState ((.cached) <$> getDerivationInfos remoteId)
+            assertEqual "no errors are emitted" [] logged
+            assertEqual "the missing derivation is cached" True cachedFlag
+            assertEqual "the missing derivation is a root leaf" [remoteId] (rootsOf finalState)
         ]
   if errors counts + failures counts == 0 then exitSuccess else exitFailure

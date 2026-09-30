@@ -6,6 +6,7 @@ module NOM.Update (
   checkFinishedBuilds,
   -- | Exposed for the unit-test regression suite.
   insertDerivation,
+  lookupDerivation,
 ) where
 
 import Control.Monad.Trans.Writer.CPS (WriterT, runWriterT, tell)
@@ -18,7 +19,7 @@ import Data.Text qualified as Text
 import Data.Time (UTCTime)
 import NOM.Builds (Derivation (..), FailType, Host (..), HostContext (..), StorePath (..), forgetProto, parseDerivation, parseIndentedStoreObject, parseStorePath)
 import NOM.Derivation qualified as NomDrv
-import NOM.Error (NOMError)
+import NOM.Error (NOMError (..))
 import NOM.NixMessage.JSON (Activity, ActivityId, ActivityResult (..), MessageAction (..), NixJSONMessage (..), ResultAction (..), StartAction (..), StopAction (..), Verbosity (..))
 import NOM.NixMessage.JSON qualified as JSON
 import NOM.NixMessage.OldStyle (NixOldStyleMessage)
@@ -76,6 +77,7 @@ import Numeric.Extra (intToDouble)
 import Optics (Ixed (..), assign', has, modifying', preuse, preview, (%), (%~), (.~))
 import Relude
 import System.Console.ANSI (SGR (Reset), setSGRCode)
+import System.IO.Error qualified as IOError
 
 type ProcessingT m a = (UpdateMonad m, MonadNOMState m) => WriterT [Either NOMError ByteString] m a
 
@@ -359,9 +361,24 @@ lookupDerivation drv = do
   unless isCached
     $ getDerivation drv
     >>= \case
+      Left (DerivationReadError err) | IOError.isDoesNotExistError err ->
+        -- The .drv lives on a remote store (--store ssh-ng://... with
+        -- --eval-store auto): there is nothing local to expand into the
+        -- dependency graph. Record a leaf node and stay quiet; without
+        -- marking cached every later event would retry and re-emit.
+        markDerivationMissing drvId
       Left err -> tell [Left err]
       Right parsedDrv -> insertDerivation parsedDrv drvId
   pure drvId
+
+-- | Record a derivation whose .drv file is not in the local store as a
+-- cached leaf, so it shows up as a single node with no children and is
+-- never retried.
+markDerivationMissing :: (MonadNOMState m) => DerivationId -> ProcessingT m ()
+markDerivationMissing drvId = do
+  noParents <- CSet.null . (.derivationParents) <$> getDerivationInfos drvId
+  when noParents $ modifying' #forestRoots (CSet.insert drvId)
+  modifying' #derivationInfos $ CMap.adjust (#cached .~ True) drvId
 
 lookupDerivationInfos :: Derivation -> ProcessingT m DerivationInfo
 lookupDerivationInfos drvName = do
