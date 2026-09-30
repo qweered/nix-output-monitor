@@ -1,7 +1,7 @@
 import Control.Monad.Trans.Writer.CPS (runWriterT)
 import Data.ByteString.Char8 qualified as ByteString
 import Data.Map.Strict qualified as Map
-import Data.Set (Set, singleton)
+import Data.Set (Set, fromList, singleton)
 import Data.Strict qualified as Strict
 import Data.Time (UTCTime (..))
 import Data.Time.Calendar (Day (..))
@@ -218,5 +218,58 @@ main = do
                 expected = evalTest (getDerivationId parentDrv)
                 finalRoots = rootsOf (execTest (insertTestDerivation parentWithChild parentDrv))
             assertEqual "the child is rewired below its parent" [expected] finalRoots
+        , "Parse input-addressed derivation" ~: do
+            assertEqual
+              "result matches"
+              ( Right
+                  NomDrv.Derivation
+                    { NomDrv.outputs = Map.singleton "out" (NomDrv.DerivationOutput (Just "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo") "" "")
+                    , NomDrv.inputDrvs = mempty
+                    , NomDrv.inputSrcs = mempty
+                    , NomDrv.platform = "x86_64-linux"
+                    , NomDrv.builder = "/bin/bash"
+                    , NomDrv.args = mempty
+                    , NomDrv.env = mempty
+                    }
+              )
+              (NomDrv.parseDerivationText "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
+        , "Parse floating CA derivation" ~: do
+            assertEqual
+              "empty path parses to Nothing"
+              ( Right
+                  NomDrv.Derivation
+                    { NomDrv.outputs = Map.singleton "out" (NomDrv.DerivationOutput Nothing "r:sha256" "")
+                    , NomDrv.inputDrvs = mempty
+                    , NomDrv.inputSrcs = mempty
+                    , NomDrv.platform = "x86_64-linux"
+                    , NomDrv.builder = "/bin/bash"
+                    , NomDrv.args = mempty
+                    , NomDrv.env = mempty
+                    }
+              )
+              (NomDrv.parseDerivationText "Derive([(\"out\",\"\",\"r:sha256\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
+        , "Parse impure derivation" ~: do
+            Right parsed <- pure (NomDrv.parseDerivationText "Derive([(\"out\",\"\",\"r:sha256\",\"impure\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
+            assertEqual "impure outputs have no known path" Nothing (NomDrv.outputPath =<< Map.lookup "out" (NomDrv.outputs parsed))
+, "Parse DrvWithVersion with dynamic inputDrvs" ~: do
+            assertEqual
+              "nested uses flatten into a single set"
+              ( Right
+                  NomDrv.Derivation
+                    { NomDrv.outputs = Map.singleton "out" (NomDrv.DerivationOutput (Just "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-top") "" "")
+                    , NomDrv.inputDrvs = Map.singleton "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dep.drv" (fromList ["bar", "foo", "out"])
+                    , NomDrv.inputSrcs = mempty
+                    , NomDrv.platform = "x86_64-linux"
+                    , NomDrv.builder = "/bin/bash"
+                    , NomDrv.args = mempty
+                    , NomDrv.env = mempty
+                    }
+              )
+              (NomDrv.parseDerivationText "DrvWithVersion(\"xp-dyn-drv\",[(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-top\",\"\",\"\")],[(\"/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dep.drv\",([\"out\"],[(\"foo\",[\"bar\"])]))],[],\"x86_64-linux\",\"/bin/bash\",[],[])")
+        , "Parse derivation escapes" ~: do
+            assertEqual
+              "escapes decode"
+              (Right (Map.singleton "GREETING" "hello\nworld"))
+              (NomDrv.env <$> NomDrv.parseDerivationText "Derive([(\"out\",\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foo\",\"\",\"\")],[],[],\"x86_64-linux\",\"/bin/bash\",[],[(\"GREETING\",\"hello\\nworld\")])")
         ]
   if errors counts + failures counts == 0 then exitSuccess else exitFailure
